@@ -24,6 +24,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--create_data',action='store_true')
     parser.add_argument('--read_data',action='store_true')
+    parser.add_argument('--random_buy_sell_simulation',action='store_true')
     parser.add_argument('--quantile_outlier',action='store_true')
     parser.add_argument('--pymc_autoregressive_model',action='store_true')
     args = parser.parse_args()
@@ -46,6 +47,56 @@ def read_data():
     print_header('read_data')
     cache[data_name] = pd.read_csv(os.path.join(output_dir,data_filename))
 
+def plot_with_confidence_interval(xs,ys,ys_upper,ys_lower,this_output_dir,plotname,width=1000,height=500,style='band'):
+    os.makedirs(this_output_dir,exist_ok=True)
+    fig = go.Figure()
+    fig.update_layout(
+        autosize=False,
+        width=width,
+        height=height,
+        paper_bgcolor="LightSteelBlue",
+        title=dict(text=plotname),
+    )
+    if style == 'band':
+        fig.add_traces([
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode='markers',
+                showlegend=False,
+            ),
+            go.Scatter(
+                x=xs,
+                y=ys_upper,
+                mode='lines',
+                line_color='rgba(0,0,0,0)',
+                showlegend=False,
+            ),
+            go.Scatter(
+                x=xs,
+                y=ys_lower,
+                mode='lines', 
+                line_color='rgba(0,0,0,0)',
+                fill='tonexty', 
+                fillcolor='rgba(0,0,255,0.2)',
+                showlegend=False,
+            )
+        ])
+    elif style == 'errorbar':
+        fig.add_traces([
+            go.Scatter(
+                x=xs,
+                y=ys,
+                error_y=dict(
+                    type='data',
+                    symmetric=False,
+                    array=[ys_upper[i]-ys[i] for i in range(len(ys))],
+                    arrayminus=[ys[i]-ys_lower[i] for i in range(len(ys))]
+                )
+            ),
+        ])
+    fig.write_image(os.path.join(this_output_dir,plotname+'.png'))
+
 def quantile_outlier(x,y,plotname='plot',delta=100,alpha=0.005):
     print_header('quantile_outlier')
     n = len(y)
@@ -60,40 +111,32 @@ def quantile_outlier(x,y,plotname='plot',delta=100,alpha=0.005):
         ys_lower.append(low)
     
     this_output_dir = os.path.join(output_dir,'quantile_outlier/')
-    os.makedirs(this_output_dir,exist_ok=True)
-    fig = go.Figure()
-    fig.update_layout(
-        autosize=False,
-        width=1000,
-        height=500,
-        paper_bgcolor="LightSteelBlue",
-        title=dict(text=plotname),
-    )
-    fig.add_traces([
-        go.Scatter(
-            x=xs,
-            y=ys,
-            mode='markers',
-            showlegend=False,
-        ),
-        go.Scatter(
-            x=xs,
-            y=ys_upper,
-            mode='lines',
-            line_color='rgba(0,0,0,0)',
-            showlegend=False,
-        ),
-        go.Scatter(
-            x=xs,
-            y=ys_lower,
-            mode='lines', 
-            line_color='rgba(0,0,0,0)',
-            fill='tonexty', 
-            fillcolor='rgba(0,0,255,0.2)',
-            showlegend=False,
-        )
-    ])
-    fig.write_image(os.path.join(this_output_dir,plotname+'.png'))
+    plot_with_confidence_interval(xs,ys,ys_upper,ys_lower,this_output_dir,plotname)
+
+def random_buy_sell_simulation_per_y(y,nboot=1000):
+    n = len(y)
+    average_profit = 0
+    ys = []
+    for i in range(nboot):
+        buy_index = np.random.randint(n)
+        sell_index = np.random.randint(n-buy_index)
+        ys.append(y[sell_index]-y[buy_index])
+    return ys
+
+def random_buy_sell_simulation(alpha=0.005,plotname='average_profit'):
+    xs,ys,ys_upper,ys_lower = [],[],[],[]
+    for column in cache[data_name]:
+        if column == date_name: continue
+        y = cache[data_name][column]
+        ys_per_stock = random_buy_sell_simulation_per_y(y)
+        xs.append(column)
+        ys.append(np.mean(ys_per_stock))
+        ys_upper.append(np.quantile(ys_per_stock,q=1-alpha))
+        ys_lower.append(np.quantile(ys_per_stock,q=alpha))
+        if np.quantile(ys_per_stock,q=1-alpha) < 0. or np.quantile(ys_per_stock,q=alpha) > 0.:
+            print('stock {:s} is not compatible with null hypothesis')
+    this_output_dir = os.path.join(output_dir,'random_buy_sell_simulation/')
+    plot_with_confidence_interval(xs,ys,ys_upper,ys_lower,this_output_dir,plotname,width=4000,style='errorbar')
 
 def pymc_autoregressive_model(y):
     print_header('pymc_autoregressive_model')
@@ -120,6 +163,7 @@ def main():
     args = parse_arguments()
     if args.create_data: create_data()
     if args.read_data: read_data()
+    if args.random_buy_sell_simulation: random_buy_sell_simulation()
 
     if args.quantile_outlier:
         for column in cache[data_name]:
